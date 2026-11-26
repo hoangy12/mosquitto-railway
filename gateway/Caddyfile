@@ -1,0 +1,45 @@
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static 100.64.0.0/10 fd00::/8
+	}
+}
+
+:{$PORT} {
+	# The gateway's own liveness route. Railway's prober is anonymous and the
+	# broker answers 401 on every path it serves, so the check has to be local.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Mosquitto keeps MQTT-over-WebSockets and the dashboard on different ports and
+	# a Railway domain maps to exactly one, so traffic is split by protocol here.
+	@ws header Upgrade *ebsocket*
+	handle @ws {
+		reverse_proxy {$BROKER_WS_HOST}
+	}
+
+	# Mosquitto's file server labels every .css and .js file text/plain, and Chrome
+	# refuses a text/plain stylesheet outright, so the dashboard arrives unstyled.
+	# Correct the type on the way out; the file itself is untouched.
+	@css path *.css
+	handle @css {
+		reverse_proxy {$BROKER_API_HOST} {
+			header_down Content-Type "text/css; charset=utf-8"
+		}
+	}
+
+	@js path *.js
+	handle @js {
+		reverse_proxy {$BROKER_API_HOST} {
+			header_down Content-Type "text/javascript; charset=utf-8"
+		}
+	}
+
+	# Dashboard and read-only HTTP API. Authorization is forwarded untouched:
+	# Mosquitto itself checks HTTP Basic against the MQTT accounts.
+	handle {
+		reverse_proxy {$BROKER_API_HOST}
+	}
+}
